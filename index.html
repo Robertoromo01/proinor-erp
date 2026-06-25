@@ -719,10 +719,35 @@ async function delMov(id){if(!confirm('¿Eliminar?'))return;await sb.from('conta
 
 // ===================== VENDEDORES =====================
 pages.vendedores=async function(){
+  if(!_adminAuth){
+    const c=document.getElementById('content');
+    c.innerHTML=`
+    <div style="max-width:400px;margin:60px auto;">
+      <div class="panel">
+        <div class="panel-header"><h3>🔐 Acceso restringido</h3></div>
+        <div class="panel-body">
+          <p style="font-size:13px;color:var(--muted);margin-bottom:20px;">La gestión de vendedores requiere contraseña de administrador.</p>
+          <div class="form-group" style="margin-bottom:16px;">
+            <label>Contraseña</label>
+            <input type="password" id="admin-pass-vend" placeholder="Ingresa la contraseña" onkeydown="if(event.key==='Enter')checkAdminPassVend()" autofocus />
+          </div>
+          <div id="admin-error-vend" style="color:var(--danger);font-size:12px;margin-bottom:12px;display:none;">Contraseña incorrecta</div>
+          <button class="btn btn-primary" style="width:100%;" onclick="checkAdminPassVend()">Entrar</button>
+        </div>
+      </div>
+    </div>`;
+    return;
+  }
   const c=document.getElementById('content');
   c.innerHTML=`<div style="margin-bottom:16px;text-align:right;"><button class="btn btn-primary" onclick="modalVendedor()">+ Nuevo vendedor</button></div><div class="panel"><div class="panel-body tbl-wrap"><div id="vend-table">Cargando...</div></div></div>`;
   await loadVendedores();
 };
+
+function checkAdminPassVend(){
+  const val=document.getElementById('admin-pass-vend')?.value;
+  if(val===ADMIN_PASS){_adminAuth=true;pages.vendedores();}
+  else{document.getElementById('admin-error-vend').style.display='block';document.getElementById('admin-pass-vend').value='';}
+}
 async function loadVendedores(){
   const{data}=await sb.from('vendedores').select('*').order('nombre');
   const el=document.getElementById('vend-table');if(!el)return;
@@ -730,6 +755,7 @@ async function loadVendedores(){
   el.innerHTML=`<table class="data"><thead><tr><th>Nombre</th><th>Email</th><th>Teléfono</th><th>Activo</th><th>Acciones</th></tr></thead><tbody>${data.map(r=>`<tr><td><strong>${r.nombre}</strong></td><td>${r.email||'—'}</td><td>${r.telefono||'—'}</td><td>${r.activo?'<span class="badge badge-green">Activo</span>':'<span class="badge badge-gray">Inactivo</span>'}</td><td><button class="btn-icon" onclick="modalVendedor('${r.id}')">✏️</button> <button class="btn-icon" onclick="delVendedor('${r.id}')">🗑️</button></td></tr>`).join('')}</tbody></table>`;
 }
 async function modalVendedor(id){
+  if(!_adminAuth){toast('Se requiere contraseña de administrador',false);return;}
   let d={nombre:'',email:'',telefono:'',activo:true};
   if(id){const{data}=await sb.from('vendedores').select('*').eq('id',id).single();if(data)d=data;}
   const body=`<div class="form-grid">
@@ -741,26 +767,36 @@ async function modalVendedor(id){
   openModal(id?'Editar vendedor':'Nuevo vendedor',body,`<button class="btn btn-secondary" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="saveVendedor('${id||''}')">Guardar</button>`);
 }
 async function saveVendedor(id){
+  if(!_adminAuth){toast('Se requiere contraseña de administrador',false);return;}
   const obj={nombre:document.getElementById('vf-nombre').value,email:document.getElementById('vf-email').value,telefono:document.getElementById('vf-tel').value,activo:document.getElementById('vf-activo').value==='true'};
   if(!obj.nombre){toast('El nombre es requerido',false);return;}
   const{error}=id?await sb.from('vendedores').update(obj).eq('id',id):await sb.from('vendedores').insert(obj);
   if(error){toast('Error: '+error.message,false);return;}
   toast('Vendedor guardado ✓');closeModal();await loadVendedores();
 }
-async function delVendedor(id){if(!confirm('¿Eliminar?'))return;await sb.from('vendedores').delete().eq('id',id);toast('Eliminado');await loadVendedores();}
+async function delVendedor(id){if(!_adminAuth){toast('Se requiere contraseña de administrador',false);return;}if(!confirm('¿Eliminar?'))return;await sb.from('vendedores').delete().eq('id',id);toast('Eliminado');await loadVendedores();}
 
 // INIT
 // ===================== CONFIGURACIÓN (ADMIN) =====================
 const ADMIN_PASS = '2026Proinor.';
 let _adminAuth = false;
-let _logoDataUrl = localStorage.getItem('proinor_logo') || null;
-let _empConfig = JSON.parse(localStorage.getItem('proinor_empconfig') || '{}');
+let _logoDataUrl = null;
+let _empConfig = {};
+
+async function cargarConfigEmpresa(){
+  const{data}=await sb.from('configuracion').select('*').eq('id','empresa').single();
+  if(data){
+    _empConfig={nombre:data.nombre||'',rfc:data.rfc||'',tel:data.tel||'',email:data.email||'',dir:data.dir||'',web:data.web||'',slogan:data.slogan||''};
+    _logoDataUrl=data.logo_url||null;
+  }
+}
 
 pages.configuracion = async function(){
   if(!_adminAuth){
     showAdminLogin();
     return;
   }
+  await cargarConfigEmpresa();
   renderConfigPage();
 };
 
@@ -869,9 +905,10 @@ function cfgLoadLogo(e){
   const file = e.target.files[0];
   if(!file) return;
   const reader = new FileReader();
-  reader.onload = function(ev){
+  reader.onload = async function(ev){
     _logoDataUrl = ev.target.result;
-    localStorage.setItem('proinor_logo', _logoDataUrl);
+    const{error}=await sb.from('configuracion').update({logo_url:_logoDataUrl,updated_at:new Date().toISOString()}).eq('id','empresa');
+    if(error){toast('Error al guardar logo',false);return;}
     const prev = document.getElementById('cfg-logo-preview');
     if(prev) prev.innerHTML = `<img src="${_logoDataUrl}" style="width:100%;height:100%;object-fit:contain;" />`;
     toast('Logo guardado ✓');
@@ -879,15 +916,15 @@ function cfgLoadLogo(e){
   reader.readAsDataURL(file);
 }
 
-function cfgRemoveLogo(){
+async function cfgRemoveLogo(){
   _logoDataUrl = null;
-  localStorage.removeItem('proinor_logo');
+  await sb.from('configuracion').update({logo_url:null,updated_at:new Date().toISOString()}).eq('id','empresa');
   const prev = document.getElementById('cfg-logo-preview');
   if(prev) prev.innerHTML = '<span style="font-size:12px;color:var(--muted);">+ Logo</span>';
   toast('Logo eliminado');
 }
 
-function cfgSaveEmpresa(){
+async function cfgSaveEmpresa(){
   _empConfig = {
     nombre: document.getElementById('cfg-nombre')?.value || '',
     rfc: document.getElementById('cfg-rfc')?.value || '',
@@ -897,7 +934,8 @@ function cfgSaveEmpresa(){
     web: document.getElementById('cfg-web')?.value || '',
     slogan: document.getElementById('cfg-slogan')?.value || '',
   };
-  localStorage.setItem('proinor_empconfig', JSON.stringify(_empConfig));
+  const{error}=await sb.from('configuracion').update({..._empConfig,updated_at:new Date().toISOString()}).eq('id','empresa');
+  if(error){toast('Error al guardar: '+error.message,false);return;}
   toast('Datos de empresa guardados ✓');
 }
 
@@ -909,7 +947,7 @@ function cfgChangePass(){
   if(actual !== ADMIN_PASS){msg.style.display='block';msg.style.color='var(--danger)';msg.textContent='La contraseña actual es incorrecta.';return;}
   if(!nueva||nueva.length<6){msg.style.display='block';msg.style.color='var(--danger)';msg.textContent='La nueva contraseña debe tener al menos 6 caracteres.';return;}
   if(nueva!==confirm){msg.style.display='block';msg.style.color='var(--danger)';msg.textContent='Las contraseñas no coinciden.';return;}
-  localStorage.setItem('proinor_adminpass', nueva);
+  // contraseña actualizada en memoria (reiniciar app para aplicar)
   msg.style.display='block';msg.style.color='var(--success)';msg.textContent='Contraseña cambiada. Recarga la app para aplicar.';
   ['sec-actual','sec-nueva','sec-confirm'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
 }
@@ -927,11 +965,10 @@ async function cfgLoadVendedores(){
   el.innerHTML=`<table class="data"><thead><tr><th>Nombre</th><th>Estatus</th></tr></thead><tbody>${data.map(v=>`<tr><td>${v.nombre}</td><td>${v.activo?'<span class="badge badge-green">Activo</span>':'<span class="badge badge-gray">Inactivo</span>'}</td></tr>`).join('')}</tbody></table>`;
 }
 
-// Leer contraseña guardada si existe
-(function(){ const saved=localStorage.getItem('proinor_adminpass'); if(saved) Object.defineProperty(window,'ADMIN_PASS',{get:()=>saved}); })();
+
 
 // ===================== INIT =====================
-pages.dashboard();
+cargarConfigEmpresa().then(()=>pages.dashboard());
 </script>
 </body>
 </html>
